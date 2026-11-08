@@ -1,0 +1,23 @@
+{
+  "name": "bivouac-action",
+  "version": "0.1.0",
+  "description": "Posts a PR comment summarising dependency-bump risk — breaking changes, matching CVEs, changelog highlights. Free; no Bivouac account.",
+  "private": true,
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "npx --yes @vercel/ncc build src/main.ts -o dist",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --import tsx test/*.test.ts"
+  },
+  "dependencies": {
+    "@actions/core": "^1.11.1",
+    "@actions/github": "^6.0.0",
+    "semver": "^7.7.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.18.1",
+    "@types/semver": "^7.5.8",
+    "tsx": "^4.19.2",
+    "typescript": "^5.5.4"
+  }
+}

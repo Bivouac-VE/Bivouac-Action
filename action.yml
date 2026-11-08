@@ -1,0 +1,36 @@
+name: 'bivouac-action'
+description: 'Investigates vulnerable and breaking dependency updates on pull requests and posts one PR comment summarising the findings.'
+author: 'Bivouac'
+branding:
+  icon: 'shield'
+  color: 'orange'
+
+# Required permissions: `pull-requests: write` (post/update the PR comment; update the PR description via pulls.update on dependency-bump PRs). `contents: write` is NOT required.
+
+inputs:
+  github-token:
+    description: 'GitHub token used to read files and post the PR comment. Use the runner default ${{ github.token }}.'
+    required: true
+    default: '${{ github.token }}'
+  comment-marker:
+    description: 'Marker string used to tag the posted comment and locate prior runs body via issues.listComments. Change it to namespace the comment under different labels.'
+    required: false
+    default: '<!-- bivouac-action -->'
+
+outputs:
+  cve-summary:
+    description: 'JSON array of { name, from, to, cves, breakingChanges } — one entry per npm bump detected.'
+  breaking-summary:
+    description: 'JSON array of { name, from, to, breakingChanges } — entries for bumps whose release notes contain a BREAKING/major:/removed/deprecated marker.'
+  breaking-change-summary:
+    description: 'JSON array of { name, from, to, findings } — one finding per upstream breaking-change signal. Each finding carries category, summary, migrationNote, version, url, markers. Sources: github-releases, changelog-md, major-version-diff.'
+  comment-id:
+    description: 'ID of the posted/updated PR comment.'
+  pr-warning-count:
+    description: 'Number of packages with at least one breaking-change finding, surfaced on the PR description.'
+  pr-description-updated:
+    description: '"true" if the PR body was rewritten with the warnings block, "false" otherwise (no findings, or update failed).'
+
+runs:
+  using: 'node24'
+  main: 'dist/index.js'
