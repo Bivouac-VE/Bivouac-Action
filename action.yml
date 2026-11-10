@@ -9,7 +9,7 @@ branding:
 
 inputs:
   github-token:
-    description: 'GitHub token used to read files and post the PR comment. Defaults to the workflow's built-in GITHUB_TOKEN.'
+    description: 'GitHub token used to read files and post the PR comment. Defaults to the built-in GITHUB_TOKEN of the workflow.'
     required: false
     default: '${{ github.token }}'
   comment-marker:
