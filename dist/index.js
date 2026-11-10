@@ -33050,12 +33050,17 @@ function findMatchingRelease(releases, version) {
 /***/ }),
 
 /***/ 5719:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
 
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.clearingVersion = clearingVersion;
 exports.renderComment = renderComment;
+const semver_1 = __importDefault(__nccwpck_require__(5575));
 const state_1 = __nccwpck_require__(159);
 function advisoryCell(c) {
     return c.url ? `[\`${c.id}\`](${c.url})` : `\`${c.id}\``;
@@ -33063,6 +33068,45 @@ function advisoryCell(c) {
 function cleanSummary(summary) {
     const s = summary.replace(/\|/g, '\\|');
     return s.length > 120 ? `${s.slice(0, 117)}…` : s;
+}
+const TOP_ROWS = 5;
+function cveRow(c) {
+    const aliases = c.aliases.length > 0 ? c.aliases.map((a) => `\`${a}\``).join(', ') : '—';
+    const fixed = c.fixedVersions.length > 0 ? c.fixedVersions.map((v) => `\`${v}\``).join(', ') : 'no fix yet';
+    return `| ${advisoryCell(c)} | ${c.severity} | ${aliases} | ${fixed} | ${cleanSummary(c.summary)} |`;
+}
+function cveTable(rows) {
+    return [
+        '| Advisory | Severity | CVE | Fixed in | Summary |',
+        '| --- | --- | --- | --- | --- |',
+        ...rows.map(cveRow),
+    ];
+}
+/**
+ * Smallest version on the same major line as `to` that is at or above every
+ * advisory's patched version — i.e. the upgrade that clears them all. Returns
+ * null when an advisory has no fix on that line (or none at all).
+ */
+function clearingVersion(to, cves) {
+    const cur = semver_1.default.valid(to);
+    if (!cur || cves.length === 0)
+        return null;
+    const majorOf = (v) => semver_1.default.parse(v)?.major ?? -1;
+    const cmp = (a, b) => (semver_1.default.gt(a, b) ? 1 : semver_1.default.lt(a, b) ? -1 : 0);
+    const major = majorOf(cur);
+    let best = null;
+    for (const c of cves) {
+        const candidates = c.fixedVersions
+            .map((v) => semver_1.default.valid(v))
+            .filter((v) => !!v && semver_1.default.gt(v, cur));
+        const sameLine = candidates.filter((v) => majorOf(v) === major).sort(cmp);
+        const pick = sameLine[0] ?? candidates.sort(cmp)[0];
+        if (!pick)
+            return null;
+        if (!best || semver_1.default.gt(pick, best))
+            best = pick;
+    }
+    return best;
 }
 function renderCveTable(result) {
     const { cves, advisoryLookupFailed } = result;
@@ -33073,14 +33117,24 @@ function renderCveTable(result) {
         return '_No known advisories affect the new version._';
     const lines = [];
     lines.push(`**Still vulnerable after this bump** (${cves.length} advisory(ies)):`);
-    lines.push('');
-    lines.push('| Advisory | Severity | CVE | Fixed in | Summary |');
-    lines.push('| --- | --- | --- | --- | --- |');
-    for (const c of cves) {
-        const aliases = c.aliases.length > 0 ? c.aliases.map((a) => `\`${a}\``).join(', ') : '—';
-        const fixed = c.fixedVersions.length > 0 ? c.fixedVersions.map((v) => `\`${v}\``).join(', ') : 'no fix yet';
-        lines.push(`| ${advisoryCell(c)} | ${c.severity} | ${aliases} | ${fixed} | ${cleanSummary(c.summary)} |`);
+    const clear = clearingVersion(result.bump.to, cves);
+    if (clear) {
+        lines.push('');
+        lines.push(`_Upgrading to \`${clear}\` or later clears all of them._`);
     }
+    lines.push('');
+    if (cves.length <= TOP_ROWS) {
+        lines.push(...cveTable(cves));
+        return lines.join('\n');
+    }
+    lines.push(...cveTable(cves.slice(0, TOP_ROWS)));
+    lines.push('');
+    lines.push('<details>');
+    lines.push(`<summary>Show ${cves.length - TOP_ROWS} more</summary>`);
+    lines.push('');
+    lines.push(...cveTable(cves.slice(TOP_ROWS)));
+    lines.push('');
+    lines.push('</details>');
     return lines.join('\n');
 }
 function renderFixes(fixes) {

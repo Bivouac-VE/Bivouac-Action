@@ -1,3 +1,4 @@
+import semver from 'semver';
 import { COMMENT_MARKER } from './state';
 import type {
   BreakingChangeCategory,
@@ -15,6 +16,46 @@ function cleanSummary(summary: string): string {
   return s.length > 120 ? `${s.slice(0, 117)}…` : s;
 }
 
+const TOP_ROWS = 5;
+
+function cveRow(c: VulnerabilityRef): string {
+  const aliases = c.aliases.length > 0 ? c.aliases.map((a) => `\`${a}\``).join(', ') : '—';
+  const fixed = c.fixedVersions.length > 0 ? c.fixedVersions.map((v) => `\`${v}\``).join(', ') : 'no fix yet';
+  return `| ${advisoryCell(c)} | ${c.severity} | ${aliases} | ${fixed} | ${cleanSummary(c.summary)} |`;
+}
+
+function cveTable(rows: VulnerabilityRef[]): string[] {
+  return [
+    '| Advisory | Severity | CVE | Fixed in | Summary |',
+    '| --- | --- | --- | --- | --- |',
+    ...rows.map(cveRow),
+  ];
+}
+
+/**
+ * Smallest version on the same major line as `to` that is at or above every
+ * advisory's patched version — i.e. the upgrade that clears them all. Returns
+ * null when an advisory has no fix on that line (or none at all).
+ */
+export function clearingVersion(to: string, cves: VulnerabilityRef[]): string | null {
+  const cur = semver.valid(to);
+  if (!cur || cves.length === 0) return null;
+  const majorOf = (v: string): number => semver.parse(v)?.major ?? -1;
+  const cmp = (a: string, b: string): number => (semver.gt(a, b) ? 1 : semver.lt(a, b) ? -1 : 0);
+  const major = majorOf(cur);
+  let best: string | null = null;
+  for (const c of cves) {
+    const candidates = c.fixedVersions
+      .map((v) => semver.valid(v))
+      .filter((v): v is string => !!v && semver.gt(v, cur));
+    const sameLine = candidates.filter((v) => majorOf(v) === major).sort(cmp);
+    const pick = sameLine[0] ?? candidates.sort(cmp)[0];
+    if (!pick) return null;
+    if (!best || semver.gt(pick, best)) best = pick;
+  }
+  return best;
+}
+
 function renderCveTable(result: BumpResult): string {
   const { cves, advisoryLookupFailed } = result;
   if (advisoryLookupFailed) {
@@ -23,14 +64,24 @@ function renderCveTable(result: BumpResult): string {
   if (cves.length === 0) return '_No known advisories affect the new version._';
   const lines: string[] = [];
   lines.push(`**Still vulnerable after this bump** (${cves.length} advisory(ies)):`);
-  lines.push('');
-  lines.push('| Advisory | Severity | CVE | Fixed in | Summary |');
-  lines.push('| --- | --- | --- | --- | --- |');
-  for (const c of cves) {
-    const aliases = c.aliases.length > 0 ? c.aliases.map((a) => `\`${a}\``).join(', ') : '—';
-    const fixed = c.fixedVersions.length > 0 ? c.fixedVersions.map((v) => `\`${v}\``).join(', ') : 'no fix yet';
-    lines.push(`| ${advisoryCell(c)} | ${c.severity} | ${aliases} | ${fixed} | ${cleanSummary(c.summary)} |`);
+  const clear = clearingVersion(result.bump.to, cves);
+  if (clear) {
+    lines.push('');
+    lines.push(`_Upgrading to \`${clear}\` or later clears all of them._`);
   }
+  lines.push('');
+  if (cves.length <= TOP_ROWS) {
+    lines.push(...cveTable(cves));
+    return lines.join('\n');
+  }
+  lines.push(...cveTable(cves.slice(0, TOP_ROWS)));
+  lines.push('');
+  lines.push('<details>');
+  lines.push(`<summary>Show ${cves.length - TOP_ROWS} more</summary>`);
+  lines.push('');
+  lines.push(...cveTable(cves.slice(TOP_ROWS)));
+  lines.push('');
+  lines.push('</details>');
   return lines.join('\n');
 }
 
