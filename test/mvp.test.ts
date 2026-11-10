@@ -18,7 +18,46 @@ const FIXTURE_AFTER =
   '{"name":"fixture","private":true,' +
   '"dependencies":{"minimist":"1.2.5","lodash":"4.17.21","safe-pkg":"1.2.3"}}';
 
+// Fixture slice of the GitHub Advisory Database, served by the stub's
+// `request('GET /advisories', { affects })` handler.
+const ADVISORIES: Record<string, unknown[]> = {
+  'minimist@1.2.0': [
+    {
+      ghsa_id: 'GHSA-9m62-748x-fj5v',
+      cve_id: 'CVE-2021-44906',
+      html_url: 'https://github.com/advisories/GHSA-9m62-748x-fj5v',
+      summary: 'Prototype Pollution in minimist',
+      severity: 'critical',
+      identifiers: [{ type: 'CVE', value: 'CVE-2021-44906' }],
+      withdrawn_at: null,
+      vulnerabilities: [
+        { package: { ecosystem: 'npm', name: 'minimist' }, first_patched_version: '1.2.6' },
+      ],
+    },
+  ],
+  'lodash@4.17.20': [
+    {
+      ghsa_id: 'GHSA-35jh-r3h4-6jhm',
+      cve_id: 'CVE-2021-23337',
+      html_url: 'https://github.com/advisories/GHSA-35jh-r3h4-6jhm',
+      summary: 'Command Injection in lodash',
+      severity: 'high',
+      identifiers: [{ type: 'CVE', value: 'CVE-2021-23337' }],
+      withdrawn_at: null,
+      vulnerabilities: [
+        { package: { ecosystem: 'npm', name: 'lodash' }, first_patched_version: '4.17.21' },
+      ],
+    },
+  ],
+};
+ADVISORIES['minimist@1.2.5'] = ADVISORIES['minimist@1.2.0'] ?? [];
+
+async function advisoryRequest(_route: string, params: { affects?: string }) {
+  return { data: ADVISORIES[params.affects ?? ''] ?? [] };
+}
+
 interface Stub {
+  request: typeof advisoryRequest;
   rest: {
     pulls: {
       listFiles: () => Promise<{ data: Array<{ filename: string; status: string }> }>;
@@ -42,6 +81,7 @@ function buildStubOctokit(opts: { existing?: number | null; prBody?: string } = 
   const postedId = 17;
   let createdAt: number | null = null;
   const stub: Stub = {
+    request: advisoryRequest,
     rest: {
       pulls: {
         async listFiles() {
@@ -122,8 +162,11 @@ test('mvp — fixture: minimist 1.2.0 → 1.2.5 produces a CVE-matched comment',
   assert.equal(minimist.cves[0]?.id, 'GHSA-9m62-748x-fj5v');
   assert.deepEqual(minimist.cves[0]?.aliases, ['CVE-2021-44906']);
 
-  // lodash 4.17.20 → 4.17.21 lands on the fixed version → no CVE match.
+  // lodash 4.17.20 → 4.17.21 lands on the fixed version → no remaining
+  // advisory, and the bump is credited with fixing GHSA-35jh-r3h4-6jhm.
   assert.equal(lodash.cves.length, 0);
+  assert.equal(lodash.fixes?.length, 1);
+  assert.equal(lodash.fixes?.[0]?.id, 'GHSA-35jh-r3h4-6jhm');
   assert.equal(safe.cves.length, 0);
 
   const body = stub.getPosted().body;
@@ -133,13 +176,15 @@ test('mvp — fixture: minimist 1.2.0 → 1.2.5 produces a CVE-matched comment',
   // negative cases.
   assert.ok(body.startsWith(COMMENT_MARKER));
   assert.match(body, /## Dependency bump CVE summary/);
-  assert.match(body, /3 bumps analysed · 1 match known advisories ·/);
+  assert.match(body, /3 bumps analysed · 1 advisory\(ies\) fixed · 1 still vulnerable ·/);
+  assert.match(body, /Fixed by this bump/);
+  assert.match(body, /Fixed in/);
   assert.match(body, /### `minimist` `1\.2\.0` → `1\.2\.5`/);
   assert.match(body, /GHSA-9m62-748x-fj5v/);
   assert.match(body, /CVE-2021-44906/);
   assert.match(body, /### `lodash` `4\.17\.20` → `4\.17\.21`/);
   assert.match(body, /### `safe-pkg` `1\.0\.0` → `1\.2\.3`/);
-  assert.match(body, /_No CVEs match the new version\._/);
+  assert.match(body, /_No known advisories affect the new version\._/);
 });
 
 test('mvp — second push updates the existing bivouac comment in place', async () => {
@@ -180,6 +225,7 @@ test('mvp — major-version crossing appends a PR-description warning block via 
     let updatedPrBody: string | null = null;
     const postedId = 17;
     const out: Stub = {
+      request: advisoryRequest,
       rest: {
         pulls: {
           async listFiles() {

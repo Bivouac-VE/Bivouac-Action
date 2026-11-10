@@ -6,15 +6,42 @@ import type {
   VulnerabilityRef,
 } from './types';
 
-function renderCveTable(cves: VulnerabilityRef[]): string {
-  if (cves.length === 0) return '_No CVEs match the new version._';
+function advisoryCell(c: VulnerabilityRef): string {
+  return c.url ? `[\`${c.id}\`](${c.url})` : `\`${c.id}\``;
+}
+
+function cleanSummary(summary: string): string {
+  const s = summary.replace(/\|/g, '\\|');
+  return s.length > 120 ? `${s.slice(0, 117)}…` : s;
+}
+
+function renderCveTable(result: BumpResult): string {
+  const { cves, advisoryLookupFailed } = result;
+  if (advisoryLookupFailed) {
+    return '_Could not reach the GitHub Advisory Database for this bump; advisories were not checked._';
+  }
+  if (cves.length === 0) return '_No known advisories affect the new version._';
   const lines: string[] = [];
-  lines.push('| ID | Severity | Aliases | Summary |');
-  lines.push('| --- | --- | --- | --- |');
+  lines.push(`**Still vulnerable after this bump** (${cves.length} advisory(ies)):`);
+  lines.push('');
+  lines.push('| Advisory | Severity | CVE | Fixed in | Summary |');
+  lines.push('| --- | --- | --- | --- | --- |');
   for (const c of cves) {
-    const summary = c.summary.length > 120 ? `${c.summary.slice(0, 117)}…` : c.summary;
     const aliases = c.aliases.length > 0 ? c.aliases.map((a) => `\`${a}\``).join(', ') : '—';
-    lines.push(`| \`${c.id}\` | ${c.severity} | ${aliases} | ${summary} |`);
+    const fixed = c.fixedVersions.length > 0 ? c.fixedVersions.map((v) => `\`${v}\``).join(', ') : 'no fix yet';
+    lines.push(`| ${advisoryCell(c)} | ${c.severity} | ${aliases} | ${fixed} | ${cleanSummary(c.summary)} |`);
+  }
+  return lines.join('\n');
+}
+
+function renderFixes(fixes: VulnerabilityRef[]): string {
+  if (fixes.length === 0) return '';
+  const lines: string[] = [];
+  lines.push(`**Fixed by this bump** (${fixes.length} advisory(ies)):`);
+  lines.push('');
+  for (const c of fixes) {
+    const cve = c.aliases.length > 0 ? ` (${c.aliases.join(', ')})` : '';
+    lines.push(`- ${advisoryCell(c)}${cve} · ${c.severity} · ${cleanSummary(c.summary)}`);
   }
   return lines.join('\n');
 }
@@ -73,25 +100,32 @@ function renderBreakingChanges(findings: BreakingChangeFinding[]): string {
 
 function summaryLine(results: BumpResult[]): string {
   let withCves = 0;
+  let fixedCount = 0;
   let withBreaking = 0;
   let totalFindings = 0;
   for (const r of results) {
     if (r.cves.length > 0) withCves += 1;
+    fixedCount += r.fixes?.length ?? 0;
     if (r.breakingChanges.length > 0) withBreaking += 1;
     totalFindings += r.breakingChanges.length;
   }
   const total = results.length;
   const noun = total === 1 ? 'bump' : 'bumps';
   const findingNoun = totalFindings === 1 ? 'finding' : 'findings';
-  return `**${total} ${noun} analysed · ${withCves} match known advisories · ${withBreaking} flag breaking changes · ${totalFindings} ${findingNoun}.**`;
+  return `**${total} ${noun} analysed · ${fixedCount} advisory(ies) fixed · ${withCves} still vulnerable · ${withBreaking} flag breaking changes · ${totalFindings} ${findingNoun}.**`;
 }
 
 function renderBumpSection(result: BumpResult): string {
-  const { bump, cves, breakingChanges } = result;
+  const { bump, breakingChanges } = result;
   const lines: string[] = [];
   lines.push(`### \`${bump.name}\` \`${bump.from}\` → \`${bump.to}\``);
   lines.push('');
-  lines.push(renderCveTable(cves));
+  const fixed = renderFixes(result.fixes ?? []);
+  if (fixed) {
+    lines.push(fixed);
+    lines.push('');
+  }
+  lines.push(renderCveTable(result));
   if (breakingChanges.length > 0) {
     lines.push('');
     lines.push(renderBreakingChanges(breakingChanges));
@@ -105,6 +139,8 @@ export function renderComment(results: BumpResult[]): string {
   const lines: string[] = [];
   lines.push(COMMENT_MARKER);
   lines.push('## Dependency bump CVE summary');
+  lines.push('');
+  lines.push('_Advisories from the [GitHub Advisory Database](https://github.com/advisories); breaking changes from upstream release notes._');
   lines.push('');
   if (results.length === 0) {
     lines.push('_No dependency bumps detected in the PR._');
