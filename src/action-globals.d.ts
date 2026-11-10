@@ -1,4 +1,4 @@
-// @polsia:user-owned — local ambient declarations so the Action's source files
+// local ambient declarations so the Action's source files
 // typecheck cleanly under the Next.js app's root tsconfig (which the build gate
 // runs `tsc --noEmit` against). The Action bundles its REAL deps (resolved at
 // npm install time inside action/) through @vercel/ncc — these shims are

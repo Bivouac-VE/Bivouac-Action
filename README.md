@@ -1,23 +1,23 @@
-# Bivouac — Autonomous dependency remediation for GitHub
+# Bivouac — dependency-update checks for GitHub pull requests
 
-> Your dependency PRs shouldn't require a developer.
+> Know what a dependency bump will break before you merge it.
 
-**Bivouac turns dependency alerts into tested, automated remediation.** When a
-new Dependabot, Renovate, or Snyk PR opens, Bivouac investigates the bump,
-opens the fix, runs your test suite, and merges when the policy pack passes —
-no human in the loop required.
+`bivouac-action` is a free, open-source GitHub Action. When a Dependabot,
+Renovate, Snyk or manual PR bumps a dependency, it checks each bumped package
+for known CVEs and for breaking changes in the upstream release notes, then
+posts one PR comment summarising what it found. No account and no API key —
+just your `GITHUB_TOKEN`.
 
-`bivouac-action` is the GitHub-side surface that you install: a free, no-account
-GitHub Action that watches your PRs and performs the **Investigate** step of
-that flow in place — matching every bumped dependency against a known-CVE
-table and flagging breaking changes in upstream release notes so the rest of the
-remediation pipeline has a verified starting point.
+The Action is the **Investigate** step of Bivouac's wider remediation workflow.
+Opening fixes, running your tests and merging are part of the hosted Bivouac
+product at [getbivouac.com](https://getbivouac.com) and are **not** performed
+by this Action.
 
 ## How it works
 
-Bivouac runs a four-step remediation loop. The open-source action ships the
-**Investigate** step out of the box; the rest is the broader Bivouac product
-that the action is the entry point into.
+Bivouac's workflow has four steps. This Action performs **Investigate**. Fix,
+Test and Merge describe the hosted Bivouac product and are listed here for
+context — installing this Action does not enable them.
 
 ### Investigate
 
@@ -35,24 +35,24 @@ findings, and — when any breaking-change signal fires — splices a warning bl
 into the PR description so it's visible to reviewers before the merge button is
 ever clicked.
 
-### Fix
+### Fix _(hosted Bivouac product)_
 
 Once the investigation is grounded in real findings, Bivouac opens the
 remediation PR with a version-aware code change. The fix is scoped to the
 specific breaking-change signals Investigate surfaced — a renamed method, a
 removed API, a deprecated alias — rather than a blanket version bump.
 
-### Test
+### Test _(hosted Bivouac product)_
 
 Bivouac runs the repository's test suite against the fix under the same policy
 pack that gated the remediation PR. A failing test is a signal, not a roadblock:
 Bivouac reports it with the failing assertion quoted so the next loop iteration
 has a concrete target.
 
-### Merge
+### Merge _(hosted Bivouac product)_
 
-When the suite is green and the policy pack passes, Bivouac merges. No
-developer needed.
+When the suite is green and your merge policy passes, the hosted product can
+merge the PR, or hand it to a reviewer — your policy decides.
 
 ## Quickstart
 
@@ -79,24 +79,19 @@ jobs:
           github-token: ${{ github.token }}
 ```
 
-Bivouac investigates each Dependabot / Renovate / Snyk PR as it opens — drop
-the step in and your next dependency alert goes through Investigate → Fix →
-Test → Merge without a human.
+Once the step is in place, every dependency-bump PR gets a Bivouac comment
+listing known CVEs and breaking-change warnings for each bumped package.
 
 ## Works alongside your existing tools
 
-Bivouac is **not** a replacement for anything already in your stack. It sits on
-top of the tools you depend on and adds the Investigate → Fix → Test → Merge
-loop they don't provide on their own:
+Bivouac is **not** a replacement for anything already in your stack. The Action
+adds a review step on top of the tools you already use:
 
-- **Dependabot** — surfaces the alerts. Bivouac turns each alert into a tested,
-  auto-remediated PR.
-- **Renovate** — schedules the updates. Bivouac investigates the bumps and
-  drives them to a green merge.
-- **Snyk** — flags the vulnerabilities. Bivouac grounds the fix in the
-  advisory and runs the test suite before merging.
-- **GitHub Actions** — runs CI. Bivouac uses your existing test suite as the
-  policy gate for auto-merge.
+- **Dependabot** and **Renovate** open the update PRs. Bivouac comments on
+  each one with the CVEs and breaking changes for the bumped packages.
+- **Snyk** flags vulnerabilities. Bivouac shows the release-note changes
+  between the old and new versions so reviewers can judge the upgrade.
+- **GitHub Actions** runs your CI. Bivouac runs as one more step alongside it.
 
 Bivouac is purely additive — the open-source action is a one-step drop-in
 to a workflow you already have.
