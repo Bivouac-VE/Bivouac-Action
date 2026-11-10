@@ -23,8 +23,8 @@ context — installing this Action does not enable them.
 
 When a dependency-bump PR opens — from Dependabot, Renovate, Snyk, or anything
 else that opens a PR — `bivouac-action` reads the `package.json` diff, matches
-every bumped dependency against a built-in known-CVE table (`lodash`,
-`minimist`, `node-fetch`, `axios`, `tough-cookie`), and walks each package's
+every bumped dependency against the
+[GitHub Advisory Database](https://github.com/advisories), and walks each package's
 release notes between the old and new versions. Bumps whose release notes
 contain a `BREAKING`, `major:`, `removed`, or `deprecated API(s)` marker are
 surfaced as quoted snippets with a link back to the upstream release. No LLM,
@@ -100,7 +100,7 @@ to a workflow you already have.
 
 | Name | Required | Default | Description |
 | --- | --- | --- | --- |
-| `github-token` | yes | `${{ github.token }}` | Token used to read files and post the PR comment. |
+| `github-token` | no | `${{ github.token }}` | Token used to read files and post the PR comment. |
 | `comment-marker` | no | `<!-- bivouac-action -->` | Marker string used to tag and locate the posted comment. Change it to namespace the comment under a different label. |
 
 ## Outputs
@@ -119,7 +119,9 @@ to a workflow you already have.
 The posted comment starts with the marker line, a single `## Dependency bump
 CVE summary` heading, a one-line summary of how many bumps matched an
 advisory or flag a breaking-change marker, and one section per bump. Each
-section shows the `(from, to)` pair, a CVE table, and — when applicable — a
+section shows the `(from, to)` pair, the advisories the bump fixes, the
+advisories that still affect the new version (with the version that clears
+them), and — when applicable — a
 "Breaking changes (release notes)" block. Each breaking-change entry quotes
 the matched marker line and links to the upstream release:
 
@@ -180,10 +182,18 @@ test-run still executes.
 
 ## CVE + breaking-change coverage
 
-The MVP ships a static table of well-known npm advisories across `lodash`,
-`minimist`, `node-fetch`, `axios`, and `tough-cookie`. A bump whose `to`
-version is strictly less than the advisory's `fixedVersion` matches; a bump
-that lands exactly on the fixed version is treated as already-patched.
+Every npm bump is checked against the reviewed advisories in the
+[GitHub Advisory Database](https://github.com/advisories), for both the old and
+the new version:
+
+- **Fixed by this bump**: advisories that affected the old version but not the
+  new one.
+- **Still vulnerable after this bump**: advisories that still affect the new
+  version, with each advisory's fixed-in version and the lowest version that
+  clears all of them.
+
+Withdrawn advisories are ignored. If the advisory database can't be reached,
+the comment says so instead of reporting a false "no advisories".
 
 Breaking-change detection walks the npm registry + GitHub Releases between
 the old and new versions. Releases whose notes mention `BREAKING`/`major:`/

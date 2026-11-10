@@ -30,7 +30,7 @@ Checks dependency-bump PRs for known CVEs and breaking changes, and posts one su
 
 `bivouac-action` is a free, open-source GitHub Action. On every
 dependency-bump PR it reads the `package.json` diff, checks each bumped package
-against a built-in known-CVE table, reads the release notes between the old and
+against the GitHub Advisory Database, reads the release notes between the old and
 new versions, and posts (or updates) one PR comment summarising the findings.
 Breaking-change warnings are also added to the PR description so reviewers see
 them before merging. No LLM, no account, no key beyond your `GITHUB_TOKEN`.

@@ -33050,23 +33050,102 @@ function findMatchingRelease(releases, version) {
 /***/ }),
 
 /***/ 5719:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
 
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.clearingVersion = clearingVersion;
 exports.renderComment = renderComment;
+const semver_1 = __importDefault(__nccwpck_require__(5575));
 const state_1 = __nccwpck_require__(159);
-function renderCveTable(cves) {
-    if (cves.length === 0)
-        return '_No CVEs match the new version._';
-    const lines = [];
-    lines.push('| ID | Severity | Aliases | Summary |');
-    lines.push('| --- | --- | --- | --- |');
+function advisoryCell(c) {
+    return c.url ? `[\`${c.id}\`](${c.url})` : `\`${c.id}\``;
+}
+function cleanSummary(summary) {
+    const s = summary.replace(/\|/g, '\\|');
+    return s.length > 120 ? `${s.slice(0, 117)}…` : s;
+}
+const TOP_ROWS = 5;
+function cveRow(c) {
+    const aliases = c.aliases.length > 0 ? c.aliases.map((a) => `\`${a}\``).join(', ') : '—';
+    const fixed = c.fixedVersions.length > 0 ? c.fixedVersions.map((v) => `\`${v}\``).join(', ') : 'no fix yet';
+    return `| ${advisoryCell(c)} | ${c.severity} | ${aliases} | ${fixed} | ${cleanSummary(c.summary)} |`;
+}
+function cveTable(rows) {
+    return [
+        '| Advisory | Severity | CVE | Fixed in | Summary |',
+        '| --- | --- | --- | --- | --- |',
+        ...rows.map(cveRow),
+    ];
+}
+/**
+ * Smallest version on the same major line as `to` that is at or above every
+ * advisory's patched version — i.e. the upgrade that clears them all. Returns
+ * null when an advisory has no fix on that line (or none at all).
+ */
+function clearingVersion(to, cves) {
+    const cur = semver_1.default.valid(to);
+    if (!cur || cves.length === 0)
+        return null;
+    const majorOf = (v) => semver_1.default.parse(v)?.major ?? -1;
+    const cmp = (a, b) => (semver_1.default.gt(a, b) ? 1 : semver_1.default.lt(a, b) ? -1 : 0);
+    const major = majorOf(cur);
+    let best = null;
     for (const c of cves) {
-        const summary = c.summary.length > 120 ? `${c.summary.slice(0, 117)}…` : c.summary;
-        const aliases = c.aliases.length > 0 ? c.aliases.map((a) => `\`${a}\``).join(', ') : '—';
-        lines.push(`| \`${c.id}\` | ${c.severity} | ${aliases} | ${summary} |`);
+        const candidates = c.fixedVersions
+            .map((v) => semver_1.default.valid(v))
+            .filter((v) => !!v && semver_1.default.gt(v, cur));
+        const sameLine = candidates.filter((v) => majorOf(v) === major).sort(cmp);
+        const pick = sameLine[0] ?? candidates.sort(cmp)[0];
+        if (!pick)
+            return null;
+        if (!best || semver_1.default.gt(pick, best))
+            best = pick;
+    }
+    return best;
+}
+function renderCveTable(result) {
+    const { cves, advisoryLookupFailed } = result;
+    if (advisoryLookupFailed) {
+        return '_Could not reach the GitHub Advisory Database for this bump; advisories were not checked._';
+    }
+    if (cves.length === 0)
+        return '_No known advisories affect the new version._';
+    const lines = [];
+    lines.push(`**Still vulnerable after this bump** (${cves.length} advisory(ies)):`);
+    const clear = clearingVersion(result.bump.to, cves);
+    if (clear) {
+        lines.push('');
+        lines.push(`_Upgrading to \`${clear}\` or later clears all of them._`);
+    }
+    lines.push('');
+    if (cves.length <= TOP_ROWS) {
+        lines.push(...cveTable(cves));
+        return lines.join('\n');
+    }
+    lines.push(...cveTable(cves.slice(0, TOP_ROWS)));
+    lines.push('');
+    lines.push('<details>');
+    lines.push(`<summary>Show ${cves.length - TOP_ROWS} more</summary>`);
+    lines.push('');
+    lines.push(...cveTable(cves.slice(TOP_ROWS)));
+    lines.push('');
+    lines.push('</details>');
+    return lines.join('\n');
+}
+function renderFixes(fixes) {
+    if (fixes.length === 0)
+        return '';
+    const lines = [];
+    lines.push(`**Fixed by this bump** (${fixes.length} advisory(ies)):`);
+    lines.push('');
+    for (const c of fixes) {
+        const cve = c.aliases.length > 0 ? ` (${c.aliases.join(', ')})` : '';
+        lines.push(`- ${advisoryCell(c)}${cve} · ${c.severity} · ${cleanSummary(c.summary)}`);
     }
     return lines.join('\n');
 }
@@ -33121,11 +33200,13 @@ function renderBreakingChanges(findings) {
 }
 function summaryLine(results) {
     let withCves = 0;
+    let fixedCount = 0;
     let withBreaking = 0;
     let totalFindings = 0;
     for (const r of results) {
         if (r.cves.length > 0)
             withCves += 1;
+        fixedCount += r.fixes?.length ?? 0;
         if (r.breakingChanges.length > 0)
             withBreaking += 1;
         totalFindings += r.breakingChanges.length;
@@ -33133,14 +33214,19 @@ function summaryLine(results) {
     const total = results.length;
     const noun = total === 1 ? 'bump' : 'bumps';
     const findingNoun = totalFindings === 1 ? 'finding' : 'findings';
-    return `**${total} ${noun} analysed · ${withCves} match known advisories · ${withBreaking} flag breaking changes · ${totalFindings} ${findingNoun}.**`;
+    return `**${total} ${noun} analysed · ${fixedCount} advisory(ies) fixed · ${withCves} still vulnerable · ${withBreaking} flag breaking changes · ${totalFindings} ${findingNoun}.**`;
 }
 function renderBumpSection(result) {
-    const { bump, cves, breakingChanges } = result;
+    const { bump, breakingChanges } = result;
     const lines = [];
     lines.push(`### \`${bump.name}\` \`${bump.from}\` → \`${bump.to}\``);
     lines.push('');
-    lines.push(renderCveTable(cves));
+    const fixed = renderFixes(result.fixes ?? []);
+    if (fixed) {
+        lines.push(fixed);
+        lines.push('');
+    }
+    lines.push(renderCveTable(result));
     if (breakingChanges.length > 0) {
         lines.push('');
         lines.push(renderBreakingChanges(breakingChanges));
@@ -33153,6 +33239,8 @@ function renderComment(results) {
     const lines = [];
     lines.push(state_1.COMMENT_MARKER);
     lines.push('## Dependency bump CVE summary');
+    lines.push('');
+    lines.push('_Advisories from the [GitHub Advisory Database](https://github.com/advisories); breaking changes from upstream release notes._');
     lines.push('');
     if (results.length === 0) {
         lines.push('_No dependency bumps detected in the PR._');
@@ -33172,93 +33260,104 @@ function renderComment(results) {
 /***/ }),
 
 /***/ 9189:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+/***/ ((__unused_webpack_module, exports) => {
 
 "use strict";
 
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
+// Advisory lookup backed by the GitHub Advisory Database (global security
+// advisories REST endpoint). Replaces the original hard-coded five-package
+// table so every npm bump is checked against every reviewed advisory.
+//
+// For each bump we ask two questions:
+//   1. Which advisories still affect the NEW version?  (cves)
+//   2. Which advisories affected the OLD version but not the new one?  (fixes)
+// The second matters because most Dependabot security PRs land exactly on the
+// patched version: reporting "no advisories" there undersells the PR.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.lookup = lookup;
-exports._tableForTests = _tableForTests;
-const semver_1 = __importDefault(__nccwpck_require__(5575));
-const TABLE = [
-    {
-        id: 'GHSA-p6mc-m468-83gx',
-        package: 'lodash',
+exports.toRef = toRef;
+exports.lookupAdvisories = lookupAdvisories;
+const API = 'https://api.github.com/advisories';
+async function fetchUnauthenticated(params) {
+    const url = `${API}?${new URLSearchParams(params).toString()}`;
+    const res = await fetch(url, {
+        headers: { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' },
+    });
+    if (!res.ok)
+        throw new Error(`advisories API ${res.status}`);
+    return (await res.json());
+}
+async function queryAdvisories(client, pkg, version) {
+    const params = {
         ecosystem: 'npm',
-        fixedVersion: '4.17.21',
-        severity: 'high',
-        summary: 'Command injection via the template function in lodash when used with attacker-controlled template strings.',
-        aliases: ['CVE-2021-23337'],
-    },
-    {
-        id: 'GHSA-9m62-748x-fj5v',
-        package: 'minimist',
-        ecosystem: 'npm',
-        fixedVersion: '1.2.6',
-        severity: 'critical',
-        summary: 'Prototype pollution in minimist when parsing untrusted CLI arguments.',
-        aliases: ['CVE-2021-44906'],
-    },
-    {
-        id: 'GHSA-r683-j2x4-v87g',
-        package: 'node-fetch',
-        ecosystem: 'npm',
-        fixedVersion: '2.6.7',
-        severity: 'high',
-        summary: 'Regular-expression denial-of-service in the Headers parser of node-fetch <2.6.7.',
-        aliases: ['CVE-2022-0235'],
-    },
-    {
-        id: 'GHSA-42xw-2xvc-qx8m',
-        package: 'axios',
-        ecosystem: 'npm',
-        fixedVersion: '0.27.2',
-        severity: 'high',
-        summary: 'axios <=0.27.1 / 1.x <1.6.0: CSRF-token leak via XSRF-TOKEN cookie on same-origin redirects, plus SSRF risk in proxy handling.',
-        aliases: ['CVE-2023-45857'],
-    },
-    {
-        id: 'GHSA-72xf-2jfp-w2c8',
-        package: 'tough-cookie',
-        ecosystem: 'npm',
-        fixedVersion: '4.1.3',
-        severity: 'medium',
-        summary: 'Regular-expression denial-of-service in tough-cookie cookieCompare.',
-        aliases: ['CVE-2023-3636'],
-    },
-];
-function lookup(name, to) {
+        affects: `${pkg}@${version}`,
+        type: 'reviewed',
+        per_page: '100',
+    };
+    if (typeof client.request === 'function') {
+        try {
+            const res = await client.request('GET /advisories', params);
+            return Array.isArray(res.data) ? res.data : [];
+        }
+        catch {
+            // Some tokens cannot read global advisories; the endpoint is public, so
+            // fall back to an unauthenticated request.
+        }
+    }
+    return fetchUnauthenticated(params);
+}
+function patchedVersionsFor(adv, pkg) {
     const out = [];
-    const normalized = semver_1.default.valid(to);
-    if (!normalized)
-        return out;
-    for (const adv of TABLE) {
-        if (adv.package !== name)
+    for (const v of adv.vulnerabilities ?? []) {
+        if (v.package?.name !== pkg)
             continue;
-        if (adv.ecosystem !== 'npm')
-            continue;
-        // Match when the *bumped-to* version is in the affected range — i.e.
-        // strictly less than the fix version. A bump that lands exactly on the
-        // fixed version (e.g. lodash 4.17.20 → 4.17.21) has just been patched, so
-        // it does not match.
-        const range = `>=0 <${adv.fixedVersion}`;
-        if (!semver_1.default.satisfies(normalized, range, { includePrerelease: false }))
-            continue;
-        out.push({
-            id: adv.id,
-            summary: adv.summary,
-            severity: adv.severity,
-            aliases: adv.aliases,
-            fixedVersions: [adv.fixedVersion],
-        });
+        const fpv = v.first_patched_version;
+        const id = typeof fpv === 'string' ? fpv : fpv?.identifier;
+        if (id && !out.includes(id))
+            out.push(id);
     }
     return out;
 }
-function _tableForTests() {
-    return TABLE;
+function toRef(adv, pkg) {
+    const aliases = new Set();
+    if (adv.cve_id)
+        aliases.add(adv.cve_id);
+    for (const i of adv.identifiers ?? []) {
+        if (i.type === 'CVE' && i.value)
+            aliases.add(i.value);
+    }
+    return {
+        id: adv.ghsa_id,
+        summary: (adv.summary ?? '').replace(/\s+/g, ' ').trim(),
+        severity: adv.severity && adv.severity !== 'unknown' ? adv.severity : 'unrated',
+        aliases: [...aliases],
+        fixedVersions: patchedVersionsFor(adv, pkg),
+        url: adv.html_url ?? `https://github.com/advisories/${adv.ghsa_id}`,
+    };
+}
+const SEVERITY_ORDER = { critical: 0, high: 1, medium: 2, moderate: 2, low: 3 };
+function sortBySeverity(refs) {
+    return [...refs].sort((a, b) => (SEVERITY_ORDER[a.severity] ?? 9) - (SEVERITY_ORDER[b.severity] ?? 9));
+}
+function live(list) {
+    return list.filter((a) => !a.withdrawn_at && typeof a.ghsa_id === 'string');
+}
+async function lookupAdvisories(bump, client) {
+    try {
+        const [after, before] = await Promise.all([
+            queryAdvisories(client, bump.name, bump.to),
+            bump.from ? queryAdvisories(client, bump.name, bump.from) : Promise.resolve([]),
+        ]);
+        const afterLive = live(after);
+        const stillAffecting = new Set(afterLive.map((a) => a.ghsa_id));
+        const cves = sortBySeverity(afterLive.map((a) => toRef(a, bump.name)));
+        const fixes = sortBySeverity(live(before)
+            .filter((a) => !stillAffecting.has(a.ghsa_id))
+            .map((a) => toRef(a, bump.name)));
+        return { cves, fixes, failed: false };
+    }
+    catch {
+        return { cves: [], fixes: [], failed: true };
+    }
 }
 
 
@@ -33509,11 +33608,19 @@ async function postComment(octokit, inputs, ctx, body) {
 async function process(prCtx, octokit, inputs) {
     const files = await listChangedFiles(octokit, prCtx);
     const bumps = await collectNpmBumps(files, octokit, prCtx);
-    const results = await Promise.all(bumps.map(async (bump) => ({
-        bump,
-        cves: (0, cve_lookup_1.lookup)(bump.name, bump.to),
-        breakingChanges: await (0, changelog_lookup_1.lookupBreakingChanges)(bump, octokit),
-    })));
+    const results = await Promise.all(bumps.map(async (bump) => {
+        const [advisories, breakingChanges] = await Promise.all([
+            (0, cve_lookup_1.lookupAdvisories)(bump, octokit),
+            (0, changelog_lookup_1.lookupBreakingChanges)(bump, octokit),
+        ]);
+        return {
+            bump,
+            cves: advisories.cves,
+            fixes: advisories.fixes,
+            advisoryLookupFailed: advisories.failed,
+            breakingChanges,
+        };
+    }));
     const body = (0, comment_1.renderComment)(results);
     const commentId = await postComment(octokit, inputs, prCtx, body);
     const { updated, warningCount } = await (0, pr_description_1.appendPrWarnings)(octokit, { owner: prCtx.owner, repo: prCtx.repo, prNumber: prCtx.prNumber }, results);

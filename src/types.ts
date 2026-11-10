@@ -13,6 +13,7 @@ export interface VulnerabilityRef {
   severity: string;
   aliases: string[];
   fixedVersions: string[];
+  url?: string;
 }
 
 export type BreakingChangeSource =
@@ -49,7 +50,12 @@ export interface BreakingChangeRef {
 
 export interface BumpResult {
   bump: Bump;
+  /** Advisories that still affect the new version. */
   cves: VulnerabilityRef[];
+  /** Advisories that affected the old version and are fixed by this bump. */
+  fixes?: VulnerabilityRef[];
+  /** True when the advisory database could not be reached for this bump. */
+  advisoryLookupFailed?: boolean;
   breakingChanges: BreakingChangeFinding[];
 }
 

@@ -2,7 +2,7 @@ import * as core from '@actions/core';
 import * as github from '@actions/github';
 import { lookupBreakingChanges } from './changelog-lookup';
 import { renderComment } from './comment';
-import { lookup } from './cve-lookup';
+import { lookupAdvisories } from './cve-lookup';
 import { detectNpmBumps, ecosystemForPath } from './ecosystems';
 import { readInputs } from './inputs';
 import { appendPrWarnings } from './pr-description';
@@ -153,11 +153,19 @@ export async function process(
   const bumps = await collectNpmBumps(files, octokit, prCtx);
 
   const results: BumpResult[] = await Promise.all(
-    bumps.map(async (bump) => ({
-      bump,
-      cves: lookup(bump.name, bump.to),
-      breakingChanges: await lookupBreakingChanges(bump, octokit),
-    })),
+    bumps.map(async (bump) => {
+      const [advisories, breakingChanges] = await Promise.all([
+        lookupAdvisories(bump, octokit as unknown as Parameters<typeof lookupAdvisories>[1]),
+        lookupBreakingChanges(bump, octokit),
+      ]);
+      return {
+        bump,
+        cves: advisories.cves,
+        fixes: advisories.fixes,
+        advisoryLookupFailed: advisories.failed,
+        breakingChanges,
+      };
+    }),
   );
 
   const body = renderComment(results);

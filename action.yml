@@ -9,8 +9,8 @@ branding:
 
 inputs:
   github-token:
-    description: 'GitHub token used to read files and post the PR comment. Use the runner default ${{ github.token }}.'
-    required: true
+    description: 'GitHub token used to read files and post the PR comment. Defaults to the built-in GITHUB_TOKEN of the workflow.'
+    required: false
     default: '${{ github.token }}'
   comment-marker:
     description: 'Marker string used to tag the posted comment and locate prior runs body via issues.listComments. Change it to namespace the comment under different labels.'
