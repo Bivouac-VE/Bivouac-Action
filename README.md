@@ -19,7 +19,7 @@ built-in token.
 
 ![Example bivouac-action comment on a dependency-bump pull request](https://raw.githubusercontent.com/Bivouac-VE/Bivouac-Action/main/docs/pr-comment.png)
 
-_Excerpt of a real comment the Action posted on a PR bumping axios and express._
+_Excerpt of a real comment the Action posted on a demo PR bumping axios and express._
 
 ## Quickstart
 
@@ -47,17 +47,20 @@ That's it. The next dependency PR gets one comment, which is updated in place
 when the PR changes. Checkout is not needed: the Action reads the changed files
 through the GitHub API.
 
-## Why not just Dependabot alerts?
+## What it adds to Dependabot and Renovate
 
-Dependabot and Renovate open the PR. They don't tell you, on the PR, whether
-the bump actually clears the vulnerability or what it breaks. Two things people
-miss all the time:
+Dependabot and Renovate open the PR. The Action adds the context a reviewer
+needs on the PR itself, so nobody has to dig through advisories and
+changelogs:
 
-- **A "security" bump that isn't enough.** Bumping axios from 1.5.0 to 1.6.0
-  fixes one advisory, but 31 others still apply. The comment says to go to
-  1.20.0 instead.
-- **Breaking changes hidden in release notes.** A minor or major bump that
-  renames or removes an API is quoted on the PR before anyone clicks merge.
+- **What the bump fixes.** The advisories it clears, with links, so security
+  bumps are easy to spot and prioritise.
+- **Anything still open.** If the new version still has known advisories,
+  they are listed with the version that clears them all. This matters most
+  for manual bumps and pinned versions; Dependabot's own security PRs usually
+  clear what they target.
+- **Breaking changes.** Release-note lines that remove or rename an API are
+  quoted on the PR, with a link, before anyone clicks merge.
 
 The Action adds that review step on top of Dependabot, Renovate or Snyk. It
 doesn't replace any of them.
