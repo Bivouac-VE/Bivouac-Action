@@ -5,7 +5,7 @@
   "private": true,
   "main": "dist/index.js",
   "scripts": {
-    "build": "npx --yes @vercel/ncc build src/main.ts -o dist",
+    "build": "ncc build src/main.ts -o dist",
     "typecheck": "tsc --noEmit",
     "test": "node --test --import tsx test/*.test.ts"
   },
@@ -17,6 +17,7 @@
   "devDependencies": {
     "@types/node": "^20.18.1",
     "@types/semver": "^7.5.8",
+    "@vercel/ncc": "^0.45.0",
     "tsx": "^4.19.2",
     "typescript": "^5.5.4"
   }
