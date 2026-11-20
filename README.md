@@ -56,9 +56,7 @@ changelogs:
 - **What the bump fixes.** The advisories it clears, with links, so security
   bumps are easy to spot and prioritise.
 - **Anything still open.** If the new version still has known advisories,
-  they are listed with the version that clears them all. This matters most
-  for manual bumps and pinned versions; Dependabot's own security PRs usually
-  clear what they target.
+  they are listed with the version that clears them all.
 - **Breaking changes.** Release-note lines that remove or rename an API are
   quoted on the PR, with a link, before anyone clicks merge.
 
