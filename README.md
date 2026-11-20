@@ -1,6 +1,6 @@
 # Bivouac: know what a dependency bump fixes and breaks
 
-[![GitHub Marketplace](https://img.shields.io/badge/Marketplace-bivouac--action-2ea44f?logo=github)](https://github.com/marketplace/actions/bivouac-action)
+[![GitHub Marketplace](https://img.shields.io/badge/Marketplace-Bivouac_Dependency_Bump_Advisor-2ea44f?logo=github)](https://github.com/marketplace/actions/bivouac-dependency-bump-advisor)
 [![Release](https://img.shields.io/github/v/release/Bivouac-VE/Bivouac-Action?sort=semver)](https://github.com/Bivouac-VE/Bivouac-Action/releases)
 [![Tests](https://github.com/Bivouac-VE/Bivouac-Action/actions/workflows/test.yml/badge.svg)](https://github.com/Bivouac-VE/Bivouac-Action/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
