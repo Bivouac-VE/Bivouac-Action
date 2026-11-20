@@ -1,4 +1,4 @@
-name: 'bivouac-action'
+name: 'Bivouac Dependency Bump Advisor'
 description: 'Comments on Dependabot/Renovate PRs with the CVEs each bump fixes, the ones still open, and breaking changes.'
 author: 'Bivouac'
 branding:
