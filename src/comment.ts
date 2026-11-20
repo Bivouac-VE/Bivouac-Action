@@ -1,4 +1,5 @@
 import semver from 'semver';
+import { toSemver } from './ecosystems';
 import { COMMENT_MARKER } from './state';
 import type {
   BreakingChangeCategory,
@@ -38,7 +39,7 @@ function cveTable(rows: VulnerabilityRef[]): string[] {
  * null when an advisory has no fix on that line (or none at all).
  */
 export function clearingVersion(to: string, cves: VulnerabilityRef[]): string | null {
-  const cur = semver.valid(to);
+  const cur = toSemver(to);
   if (!cur || cves.length === 0) return null;
   const majorOf = (v: string): number => semver.parse(v)?.major ?? -1;
   const cmp = (a: string, b: string): number => (semver.gt(a, b) ? 1 : semver.lt(a, b) ? -1 : 0);
@@ -46,7 +47,7 @@ export function clearingVersion(to: string, cves: VulnerabilityRef[]): string | 
   let best: string | null = null;
   for (const c of cves) {
     const candidates = c.fixedVersions
-      .map((v) => semver.valid(v))
+      .map((v) => toSemver(v))
       .filter((v): v is string => !!v && semver.gt(v, cur));
     const sameLine = candidates.filter((v) => majorOf(v) === major).sort(cmp);
     const pick = sameLine[0] ?? candidates.sort(cmp)[0];
@@ -169,11 +170,25 @@ function summaryLine(results: BumpResult[]): string {
   return `**${total} ${noun} analysed · ${fixedCount} advisory(ies) fixed · ${withCves} still vulnerable · ${withBreaking} flag breaking changes · ${totalFindings} ${findingNoun}.**`;
 }
 
+const ECOSYSTEM_LABEL: Record<string, string> = { npm: 'npm', pip: 'PyPI', go: 'Go' };
+
+function bumpMeta(bump: BumpResult['bump']): string {
+  const parts: string[] = [ECOSYSTEM_LABEL[bump.ecosystem] ?? bump.ecosystem];
+  if (bump.file) parts.push(`\`${bump.file}\``);
+  if (bump.direct === false) parts.push('indirect dependency');
+  return `<sub>${parts.join(' · ')}</sub>`;
+}
+
 function renderBumpSection(result: BumpResult): string {
   const { bump, breakingChanges } = result;
   const lines: string[] = [];
   lines.push(`### \`${bump.name}\` \`${bump.from}\` → \`${bump.to}\``);
   lines.push('');
+  const meta = bumpMeta(bump);
+  if (meta) {
+    lines.push(meta);
+    lines.push('');
+  }
   const fixed = renderFixes(result.fixes ?? []);
   if (fixed) {
     lines.push(fixed);
@@ -189,7 +204,7 @@ function renderBumpSection(result: BumpResult): string {
   return lines.join('\n');
 }
 
-export function renderComment(results: BumpResult[]): string {
+export function renderComment(results: BumpResult[], opts: { skipped?: number } = {}): string {
   const lines: string[] = [];
   lines.push(COMMENT_MARKER);
   lines.push('## Dependency bump CVE summary');
@@ -205,6 +220,12 @@ export function renderComment(results: BumpResult[]): string {
   lines.push('');
   for (const r of results) {
     lines.push(renderBumpSection(r));
+    lines.push('');
+  }
+  if (opts.skipped && opts.skipped > 0) {
+    lines.push(
+      `_${opts.skipped} more indirect bump(s) in this PR were not analysed, to stay within GitHub API rate limits._`,
+    );
     lines.push('');
   }
   return lines.join('\n');

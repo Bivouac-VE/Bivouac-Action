@@ -32743,6 +32743,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.lookupBreakingChanges = lookupBreakingChanges;
 const semver_1 = __importDefault(__nccwpck_require__(5575));
+const ecosystems_1 = __nccwpck_require__(233);
 const BREAKING_MARKERS = [
     { name: 'BREAKING', pattern: /\bBREAKING(?:\s+(?:CHANGE|CHANGES))?\b/i },
     { name: 'major:', pattern: /\bmajor\s*:/i },
@@ -32837,6 +32838,51 @@ function parseRepo(value) {
         return null;
     return { owner, repo };
 }
+async function fetchPyPi(name) {
+    try {
+        const res = await globalThis.fetch(`https://pypi.org/pypi/${encodeURIComponent(name)}/json`);
+        if (!res.ok)
+            return null;
+        return (await res.json());
+    }
+    catch {
+        return null;
+    }
+}
+function goModuleRepo(modulePath) {
+    const gh = modulePath.match(/^github\.com\/([^/]+)\/([^/]+)/);
+    if (gh && gh[1] && gh[2])
+        return { owner: gh[1], repo: gh[2] };
+    const x = modulePath.match(/^golang\.org\/x\/([^/]+)/);
+    if (x && x[1])
+        return { owner: 'golang', repo: x[1] };
+    return null;
+}
+/** Where to find release notes for a bump, and which versions exist. */
+async function resolveSource(bump) {
+    if (bump.ecosystem === 'pip') {
+        const pkg = await fetchPyPi(bump.name);
+        const urls = Object.values(pkg?.info?.project_urls ?? {});
+        let repo = null;
+        for (const u of [...urls, pkg?.info?.home_page ?? '']) {
+            repo = parseRepo(u);
+            if (repo)
+                break;
+        }
+        const known = Object.keys(pkg?.releases ?? {})
+            .map((v) => (0, ecosystems_1.toSemver)(v))
+            .filter((v) => !!v);
+        return { repo, known };
+    }
+    if (bump.ecosystem === 'go') {
+        return { repo: goModuleRepo(bump.name), known: [] };
+    }
+    const registry = await fetchRegistry(bump.name);
+    return {
+        repo: parseRepo(registry?.repository?.url) ?? parseRepo(registry?.homepage),
+        known: Object.keys(registry?.time ?? {}),
+    };
+}
 async function fetchRegistry(name) {
     try {
         const res = await globalThis.fetch(`https://registry.npmjs.org/${encodeURIComponent(name)}`);
@@ -32867,18 +32913,21 @@ function versionsInRange(from, to, known) {
     return out;
 }
 async function lookupBreakingChanges(bump, octokit) {
-    const fromV = semver_1.default.valid(bump.from);
-    const toV = semver_1.default.valid(bump.to);
+    const fromV = (0, ecosystems_1.toSemver)(bump.from);
+    const toV = (0, ecosystems_1.toSemver)(bump.to);
     if (!fromV || !toV)
         return [];
-    const registry = await fetchRegistry(bump.name);
-    const known = Object.keys(registry?.time ?? {});
-    const candidateVersions = versionsInRange(fromV, toV, known);
-    const repo = parseRepo(registry?.repository?.url) ?? parseRepo(registry?.homepage);
+    const source = await resolveSource(bump);
+    const repo = source.repo;
+    let candidateVersions = versionsInRange(fromV, toV, source.known);
     const out = [];
     let releases = null;
     if (repo) {
         releases = await fetchGitHubReleases(octokit, repo.owner, repo.repo);
+        if (releases && source.known.length === 0) {
+            // Go has no registry listing here: take the versions from release tags.
+            candidateVersions = versionsInRange(fromV, toV, releases.map((r) => stripTagPrefix(r.tag_name ?? '')));
+        }
         if (releases) {
             for (const v of candidateVersions) {
                 const release = findMatchingRelease(releases, v);
@@ -33061,6 +33110,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.clearingVersion = clearingVersion;
 exports.renderComment = renderComment;
 const semver_1 = __importDefault(__nccwpck_require__(5575));
+const ecosystems_1 = __nccwpck_require__(233);
 const state_1 = __nccwpck_require__(159);
 function advisoryCell(c) {
     return c.url ? `[\`${c.id}\`](${c.url})` : `\`${c.id}\``;
@@ -33088,7 +33138,7 @@ function cveTable(rows) {
  * null when an advisory has no fix on that line (or none at all).
  */
 function clearingVersion(to, cves) {
-    const cur = semver_1.default.valid(to);
+    const cur = (0, ecosystems_1.toSemver)(to);
     if (!cur || cves.length === 0)
         return null;
     const majorOf = (v) => semver_1.default.parse(v)?.major ?? -1;
@@ -33097,7 +33147,7 @@ function clearingVersion(to, cves) {
     let best = null;
     for (const c of cves) {
         const candidates = c.fixedVersions
-            .map((v) => semver_1.default.valid(v))
+            .map((v) => (0, ecosystems_1.toSemver)(v))
             .filter((v) => !!v && semver_1.default.gt(v, cur));
         const sameLine = candidates.filter((v) => majorOf(v) === major).sort(cmp);
         const pick = sameLine[0] ?? candidates.sort(cmp)[0];
@@ -33219,11 +33269,25 @@ function summaryLine(results) {
     const findingNoun = totalFindings === 1 ? 'finding' : 'findings';
     return `**${total} ${noun} analysed · ${fixedCount} advisory(ies) fixed · ${withCves} still vulnerable · ${withBreaking} flag breaking changes · ${totalFindings} ${findingNoun}.**`;
 }
+const ECOSYSTEM_LABEL = { npm: 'npm', pip: 'PyPI', go: 'Go' };
+function bumpMeta(bump) {
+    const parts = [ECOSYSTEM_LABEL[bump.ecosystem] ?? bump.ecosystem];
+    if (bump.file)
+        parts.push(`\`${bump.file}\``);
+    if (bump.direct === false)
+        parts.push('indirect dependency');
+    return `<sub>${parts.join(' · ')}</sub>`;
+}
 function renderBumpSection(result) {
     const { bump, breakingChanges } = result;
     const lines = [];
     lines.push(`### \`${bump.name}\` \`${bump.from}\` → \`${bump.to}\``);
     lines.push('');
+    const meta = bumpMeta(bump);
+    if (meta) {
+        lines.push(meta);
+        lines.push('');
+    }
     const fixed = renderFixes(result.fixes ?? []);
     if (fixed) {
         lines.push(fixed);
@@ -33238,7 +33302,7 @@ function renderBumpSection(result) {
     }
     return lines.join('\n');
 }
-function renderComment(results) {
+function renderComment(results, opts = {}) {
     const lines = [];
     lines.push(state_1.COMMENT_MARKER);
     lines.push('## Dependency bump CVE summary');
@@ -33256,6 +33320,10 @@ function renderComment(results) {
         lines.push(renderBumpSection(r));
         lines.push('');
     }
+    if (opts.skipped && opts.skipped > 0) {
+        lines.push(`_${opts.skipped} more indirect bump(s) in this PR were not analysed, to stay within GitHub API rate limits._`);
+        lines.push('');
+    }
     return lines.join('\n');
 }
 
@@ -33263,7 +33331,7 @@ function renderComment(results) {
 /***/ }),
 
 /***/ 9189:
-/***/ ((__unused_webpack_module, exports) => {
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
@@ -33279,6 +33347,7 @@ function renderComment(results) {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.toRef = toRef;
 exports.lookupAdvisories = lookupAdvisories;
+const ecosystems_1 = __nccwpck_require__(233);
 const API = 'https://api.github.com/advisories';
 async function fetchUnauthenticated(params) {
     const url = `${API}?${new URLSearchParams(params).toString()}`;
@@ -33289,10 +33358,14 @@ async function fetchUnauthenticated(params) {
         throw new Error(`advisories API ${res.status}`);
     return (await res.json());
 }
-async function queryAdvisories(client, pkg, version) {
+// GitHub Advisory Database records Go versions without the leading "v".
+function apiVersion(ecosystem, version) {
+    return ecosystem === 'go' ? version.replace(/^v/, '') : version;
+}
+async function queryAdvisories(client, ecosystem, pkg, version) {
     const params = {
-        ecosystem: 'npm',
-        affects: `${pkg}@${version}`,
+        ecosystem,
+        affects: `${pkg}@${apiVersion(ecosystem, version)}`,
         type: 'reviewed',
         per_page: '100',
     };
@@ -33308,10 +33381,15 @@ async function queryAdvisories(client, pkg, version) {
     }
     return fetchUnauthenticated(params);
 }
+function samePackage(a, b) {
+    if (!a)
+        return false;
+    return a === b || (0, ecosystems_1.normalizePyName)(a) === (0, ecosystems_1.normalizePyName)(b);
+}
 function patchedVersionsFor(adv, pkg) {
     const out = [];
     for (const v of adv.vulnerabilities ?? []) {
-        if (v.package?.name !== pkg)
+        if (!samePackage(v.package?.name, pkg))
             continue;
         const fpv = v.first_patched_version;
         const id = typeof fpv === 'string' ? fpv : fpv?.identifier;
@@ -33347,8 +33425,8 @@ function live(list) {
 async function lookupAdvisories(bump, client) {
     try {
         const [after, before] = await Promise.all([
-            queryAdvisories(client, bump.name, bump.to),
-            bump.from ? queryAdvisories(client, bump.name, bump.from) : Promise.resolve([]),
+            queryAdvisories(client, bump.ecosystem, bump.name, bump.to),
+            bump.from ? queryAdvisories(client, bump.ecosystem, bump.name, bump.from) : Promise.resolve([]),
         ]);
         const afterLive = live(after);
         const stillAffecting = new Set(afterLive.map((a) => a.ghsa_id));
@@ -33376,9 +33454,49 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.DETECTORS = void 0;
+exports.toSemver = toSemver;
+exports.normalizePyName = normalizePyName;
 exports.detectNpmBumps = detectNpmBumps;
+exports.detectNpmLockBumps = detectNpmLockBumps;
+exports.detectPipBumps = detectPipBumps;
+exports.detectGoBumps = detectGoBumps;
+exports.manifestKindForPath = manifestKindForPath;
 exports.ecosystemForPath = ecosystemForPath;
+exports.detectBumps = detectBumps;
+exports.mergeBumps = mergeBumps;
 const semver_1 = __importDefault(__nccwpck_require__(5575));
+// ---------------------------------------------------------------------------
+// Version helpers
+// ---------------------------------------------------------------------------
+/**
+ * Normalise a version string from any supported ecosystem into a plain
+ * semver triple for ordering. Returns null for versions we can't order
+ * safely (e.g. Python pre-releases like 2.0.0rc1, Go pseudo-versions).
+ */
+function toSemver(version) {
+    const v = version.trim().replace(/^v/, '');
+    const direct = semver_1.default.valid(v);
+    if (direct)
+        return direct;
+    const m = v.match(/^(\d+)(?:\.(\d+))?(?:\.(\d+))?$/);
+    if (!m)
+        return null;
+    return semver_1.default.valid(`${m[1]}.${m[2] ?? '0'}.${m[3] ?? '0'}`);
+}
+function isUpgrade(from, to) {
+    const a = toSemver(from);
+    const b = toSemver(to);
+    if (!a || !b)
+        return false;
+    return semver_1.default.gt(b, a);
+}
+/** PyPI canonical name: lower-case, runs of -_. become a single hyphen. */
+function normalizePyName(name) {
+    return name.trim().toLowerCase().replace(/[-_.]+/g, '-');
+}
+// ---------------------------------------------------------------------------
+// npm: package.json
+// ---------------------------------------------------------------------------
 const NPM_DEP_KEYS = [
     'dependencies',
     'devDependencies',
@@ -33386,10 +33504,7 @@ const NPM_DEP_KEYS = [
     'optionalDependencies',
 ];
 function stripRange(spec) {
-    const cleaned = spec
-        .trim()
-        .replace(/^[\^~>=<*xX\s]+/, '')
-        .replace(/[a-z]/gi, '');
+    const cleaned = spec.trim().replace(/^[\^~>=<*xX\s]+/, '');
     const v = semver_1.default.valid(cleaned);
     return v ?? null;
 }
@@ -33419,33 +33534,252 @@ function extractNpmDependencyMap(content) {
     }
     return map;
 }
-function detectNpmBumps(before, after) {
-    const beforeMap = extractNpmDependencyMap(before);
-    const afterMap = extractNpmDependencyMap(after);
+function bumpsFromMaps(beforeMap, afterMap, ecosystem, extra = {}) {
     const out = [];
     for (const [name, afterVer] of afterMap) {
         const beforeVer = beforeMap.get(name);
-        if (!beforeVer)
+        if (!beforeVer || beforeVer === afterVer)
             continue;
-        if (beforeVer === afterVer)
-            continue;
-        const a = semver_1.default.valid(beforeVer);
-        const b = semver_1.default.valid(afterVer);
-        if (!a || !b)
-            continue;
-        if (semver_1.default.gt(a, b))
+        if (!isUpgrade(beforeVer, afterVer))
             continue; // downgrades are not "bumps"
-        out.push({ name, from: beforeVer, to: afterVer, ecosystem: 'npm' });
+        out.push({ name, from: beforeVer, to: afterVer, ecosystem, ...extra });
     }
     return out;
 }
-function ecosystemForPath(filename) {
+function detectNpmBumps(before, after) {
+    return bumpsFromMaps(extractNpmDependencyMap(before), extractNpmDependencyMap(after), 'npm', {
+        direct: true,
+    });
+}
+// ---------------------------------------------------------------------------
+// npm: package-lock.json / npm-shrinkwrap.json (lockfile v1, v2, v3)
+// ---------------------------------------------------------------------------
+function lockVersions(content) {
+    const out = new Map();
+    let parsed;
+    try {
+        parsed = JSON.parse(content);
+    }
+    catch {
+        return out;
+    }
+    if (!parsed || typeof parsed !== 'object')
+        return out;
+    const add = (name, version) => {
+        if (!name || typeof version !== 'string' || !semver_1.default.valid(version))
+            return;
+        const set = out.get(name) ?? new Set();
+        set.add(version);
+        out.set(name, set);
+    };
+    const obj = parsed;
+    const packages = obj.packages;
+    if (packages && typeof packages === 'object') {
+        // v2/v3: keys are install paths, e.g. "node_modules/a/node_modules/@s/b".
+        for (const [path, meta] of Object.entries(packages)) {
+            if (!path)
+                continue; // root project
+            const idx = path.lastIndexOf('node_modules/');
+            if (idx === -1)
+                continue; // workspace folder, not an installed package
+            const name = path.slice(idx + 'node_modules/'.length);
+            const m = meta;
+            if (m && m.link === true)
+                continue;
+            add(name, m?.version);
+        }
+        return out;
+    }
+    // v1: nested "dependencies" tree.
+    const walk = (deps) => {
+        if (!deps || typeof deps !== 'object')
+            return;
+        for (const [name, meta] of Object.entries(deps)) {
+            const m = meta;
+            add(name, m?.version);
+            walk(m?.dependencies);
+        }
+    };
+    walk(obj.dependencies);
+    return out;
+}
+function directNames(content) {
+    // The root entry of a v2/v3 lockfile lists the direct dependencies.
+    try {
+        const obj = JSON.parse(content);
+        const root = obj.packages?.[''];
+        const names = new Set();
+        for (const k of NPM_DEP_KEYS) {
+            const block = root?.[k];
+            if (block && typeof block === 'object')
+                for (const n of Object.keys(block))
+                    names.add(n);
+        }
+        return names;
+    }
+    catch {
+        return new Set();
+    }
+}
+function detectNpmLockBumps(before, after) {
+    const a = lockVersions(before);
+    const b = lockVersions(after);
+    const direct = directNames(after);
+    const out = [];
+    for (const [name, afterSet] of b) {
+        const beforeSet = a.get(name);
+        if (!beforeSet)
+            continue; // newly added package
+        const removed = [...beforeSet].filter((v) => !afterSet.has(v)).sort(cmpDesc);
+        const added = [...afterSet].filter((v) => !beforeSet.has(v)).sort(cmpDesc);
+        const from = removed[0];
+        const to = added[0];
+        if (!from || !to || !isUpgrade(from, to))
+            continue;
+        out.push({ name, from, to, ecosystem: 'npm', direct: direct.has(name) });
+    }
+    return out;
+}
+function cmpDesc(x, y) {
+    return semver_1.default.gt(x, y) ? -1 : semver_1.default.lt(x, y) ? 1 : 0;
+}
+// ---------------------------------------------------------------------------
+// Python: requirements*.txt, poetry.lock, uv.lock
+// ---------------------------------------------------------------------------
+function requirementsMap(content) {
+    const map = new Map();
+    for (const raw of content.split(/\r?\n/)) {
+        const line = raw.replace(/\s+#.*$/, '').replace(/^#.*$/, '').trim();
+        if (!line || line.startsWith('-'))
+            continue;
+        // name[extras]==version ; markers
+        const m = line.match(/^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?\s*===?\s*([^\s;,\\]+)/);
+        if (!m || !m[1] || !m[2])
+            continue;
+        map.set(normalizePyName(m[1]), m[2]);
+    }
+    return map;
+}
+function tomlLockMap(content) {
+    // poetry.lock and uv.lock both use [[package]] tables with name/version.
+    const map = new Map();
+    for (const block of content.split(/^\[\[package\]\]\s*$/m).slice(1)) {
+        const name = block.match(/^name\s*=\s*"([^"]+)"/m)?.[1];
+        const version = block.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
+        if (name && version)
+            map.set(normalizePyName(name), version);
+    }
+    return map;
+}
+function detectPipBumps(filename, before, after) {
+    const base = filename.split('/').pop() ?? filename;
+    const parse = base.endsWith('.lock') ? tomlLockMap : requirementsMap;
+    return bumpsFromMaps(parse(before), parse(after), 'pip', {
+        direct: !base.endsWith('.lock') ? true : undefined,
+    });
+}
+// ---------------------------------------------------------------------------
+// Go: go.mod
+// ---------------------------------------------------------------------------
+function goModMap(content) {
+    const map = new Map();
+    let inRequire = false;
+    for (const raw of content.split(/\r?\n/)) {
+        const line = raw.trim();
+        if (/^require\s*\($/.test(line)) {
+            inRequire = true;
+            continue;
+        }
+        if (inRequire && line === ')') {
+            inRequire = false;
+            continue;
+        }
+        const body = inRequire ? line : line.match(/^require\s+(.+)$/)?.[1];
+        if (!body)
+            continue;
+        const m = body.match(/^(\S+)\s+(v\S+)(.*)$/);
+        if (!m || !m[1] || !m[2])
+            continue;
+        map.set(m[1], { version: m[2], indirect: /\/\/\s*indirect/.test(m[3] ?? '') });
+    }
+    return map;
+}
+function detectGoBumps(before, after) {
+    const a = goModMap(before);
+    const b = goModMap(after);
+    const out = [];
+    for (const [name, now] of b) {
+        const prev = a.get(name);
+        if (!prev || prev.version === now.version)
+            continue;
+        if (!isUpgrade(prev.version, now.version))
+            continue;
+        out.push({ name, from: prev.version, to: now.version, ecosystem: 'go', direct: !now.indirect });
+    }
+    return out;
+}
+function manifestKindForPath(filename) {
     const base = filename.split('/').pop() ?? filename;
     if (base === 'package.json')
-        return 'npm';
+        return 'npm-manifest';
+    if (base === 'package-lock.json' || base === 'npm-shrinkwrap.json')
+        return 'npm-lock';
+    if (/^requirements.*\.txt$/.test(base) || base === 'poetry.lock' || base === 'uv.lock')
+        return 'pip';
+    if (base === 'go.mod')
+        return 'go';
     return null;
 }
-exports.DETECTORS = ['npm'];
+function ecosystemForPath(filename) {
+    const kind = manifestKindForPath(filename);
+    if (kind === 'npm-manifest' || kind === 'npm-lock')
+        return 'npm';
+    if (kind === 'pip')
+        return 'pip';
+    if (kind === 'go')
+        return 'go';
+    return null;
+}
+function detectBumps(filename, before, after) {
+    const kind = manifestKindForPath(filename);
+    const tag = (bumps) => bumps.map((b) => ({ ...b, file: filename }));
+    switch (kind) {
+        case 'npm-manifest':
+            return tag(detectNpmBumps(before, after));
+        case 'npm-lock':
+            return tag(detectNpmLockBumps(before, after));
+        case 'pip':
+            return tag(detectPipBumps(filename, before, after));
+        case 'go':
+            return tag(detectGoBumps(before, after));
+        default:
+            return [];
+    }
+}
+/**
+ * Merge bumps from several files. When package.json and package-lock.json
+ * both report the same package, keep the lockfile's (exact installed) versions
+ * but remember it is a direct dependency.
+ */
+function mergeBumps(bumps) {
+    const byKey = new Map();
+    const order = [];
+    for (const b of bumps) {
+        const key = `${b.ecosystem}::${b.name}`;
+        const prev = byKey.get(key);
+        if (!prev) {
+            byKey.set(key, b);
+            order.push(key);
+            continue;
+        }
+        const prevIsLock = manifestKindForPath(prev.file ?? '') === 'npm-lock';
+        const curIsLock = manifestKindForPath(b.file ?? '') === 'npm-lock';
+        const keep = curIsLock && !prevIsLock ? b : prev;
+        byKey.set(key, { ...keep, direct: Boolean(prev.direct || b.direct) || keep.direct });
+    }
+    return order.map((k) => byKey.get(k)).filter((b) => !!b);
+}
+exports.DETECTORS = ['npm', 'pip', 'go'];
 
 
 /***/ }),
@@ -33502,6 +33836,7 @@ const inputs_1 = __nccwpck_require__(7881);
 const pr_description_1 = __nccwpck_require__(5553);
 const state_1 = __nccwpck_require__(159);
 Object.defineProperty(exports, "COMMENT_MARKER", ({ enumerable: true, get: function () { return state_1.COMMENT_MARKER; } }));
+const MAX_BUMPS = 40;
 function getPrContext() {
     const ctx = github.context;
     const pr = ctx.payload.pull_request;
@@ -33556,9 +33891,24 @@ async function fetchFileAt(octokit, owner, repo, path, ref) {
         if (!data || typeof data !== 'object')
             return '';
         const blob = data.content;
-        if (typeof blob === 'string') {
+        if (typeof blob === 'string' && blob.length > 0) {
             const trimmed = blob.replace(/\n/g, '');
             return Buffer.from(trimmed, 'base64').toString('utf8');
+        }
+        // Files over 1 MB (large lockfiles) come back without a base64 body;
+        // fetch the raw bytes instead.
+        const request = octokit
+            .request;
+        if (typeof request === 'function') {
+            const raw = await request('GET /repos/{owner}/{repo}/contents/{path}', {
+                owner,
+                repo,
+                path,
+                ref,
+                mediaType: { format: 'raw' },
+            });
+            if (typeof raw.data === 'string')
+                return raw.data;
         }
         return '';
     }
@@ -33566,10 +33916,10 @@ async function fetchFileAt(octokit, owner, repo, path, ref) {
         return '';
     }
 }
-async function collectNpmBumps(files, octokit, ctx) {
+async function collectBumps(files, octokit, ctx) {
     const out = [];
     for (const f of files) {
-        if ((0, ecosystems_1.ecosystemForPath)(f.filename) !== 'npm')
+        if (!(0, ecosystems_1.manifestKindForPath)(f.filename))
             continue;
         let before = '';
         let after = '';
@@ -33583,10 +33933,10 @@ async function collectNpmBumps(files, octokit, ctx) {
             after = await fetchFileAt(octokit, ctx.owner, ctx.repo, f.filename, ctx.headSha);
             before = await fetchFileAt(octokit, ctx.owner, ctx.repo, f.filename, ctx.baseSha);
         }
-        for (const b of (0, ecosystems_1.detectNpmBumps)(before, after))
+        for (const b of (0, ecosystems_1.detectBumps)(f.filename, before, after))
             out.push(b);
     }
-    return out;
+    return (0, ecosystems_1.mergeBumps)(out);
 }
 async function postComment(octokit, inputs, ctx, body) {
     const marker = inputs.commentMarker || state_1.COMMENT_MARKER;
@@ -33610,7 +33960,12 @@ async function postComment(octokit, inputs, ctx, body) {
 }
 async function process(prCtx, octokit, inputs) {
     const files = await listChangedFiles(octokit, prCtx);
-    const bumps = await collectNpmBumps(files, octokit, prCtx);
+    const allBumps = await collectBumps(files, octokit, prCtx);
+    // Direct dependencies first, then transitive; cap the work on huge
+    // lockfile-maintenance PRs so we stay inside API rate limits.
+    const ordered = [...allBumps].sort((a, b) => Number(b.direct === true) - Number(a.direct === true));
+    const bumps = ordered.slice(0, MAX_BUMPS);
+    const skipped = ordered.length - bumps.length;
     const results = await Promise.all(bumps.map(async (bump) => {
         const [advisories, breakingChanges] = await Promise.all([
             (0, cve_lookup_1.lookupAdvisories)(bump, octokit),
@@ -33624,7 +33979,7 @@ async function process(prCtx, octokit, inputs) {
             breakingChanges,
         };
     }));
-    const body = (0, comment_1.renderComment)(results);
+    const body = (0, comment_1.renderComment)(results, { skipped });
     const commentId = await postComment(octokit, inputs, prCtx, body);
     const { updated, warningCount } = await (0, pr_description_1.appendPrWarnings)(octokit, { owner: prCtx.owner, repo: prCtx.repo, prNumber: prCtx.prNumber }, results);
     return { body, results, commentId, prDescriptionUpdated: updated, prWarningCount: warningCount };
