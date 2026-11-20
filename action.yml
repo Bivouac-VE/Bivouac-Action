@@ -1,5 +1,5 @@
 name: 'bivouac-action'
-description: 'Investigates vulnerable and breaking dependency updates on pull requests and posts one PR comment summarising the findings.'
+description: 'Comments on Dependabot/Renovate PRs with the CVEs each bump fixes, the ones still open, and breaking changes.'
 author: 'Bivouac'
 branding:
   icon: 'shield'
@@ -19,7 +19,7 @@ inputs:
 
 outputs:
   cve-summary:
-    description: 'JSON array of { name, from, to, cves, breakingChanges } — one entry per npm bump detected.'
+    description: 'JSON array of { name, from, to, cves, breakingChanges } — one entry per dependency bump detected.'
   breaking-summary:
     description: 'JSON array of { name, from, to, breakingChanges } — entries for bumps whose release notes contain a BREAKING/major:/removed/deprecated marker.'
   breaking-change-summary:

@@ -133,3 +133,24 @@ test('renderComment — long advisory lists collapse after five rows and suggest
   assert.match(body, /<summary>Show 3 more<\/summary>/);
   assert.equal(clearingVersion('1.6.0', [{ ...cves[0]!, fixedVersions: [] }]), null);
 });
+
+test('renderComment — shows ecosystem, file and indirect flag, and skipped count', () => {
+  const body = renderComment(
+    [
+      {
+        bump: { name: 'qs', from: '6.11.0', to: '6.13.0', ecosystem: 'npm', file: 'package-lock.json', direct: false },
+        cves: [],
+        breakingChanges: [],
+      },
+      {
+        bump: { name: 'requests', from: '2.31.0', to: '2.32.3', ecosystem: 'pip', file: 'requirements.txt', direct: true },
+        cves: [],
+        breakingChanges: [],
+      },
+    ],
+    { skipped: 3 },
+  );
+  assert.match(body, /<sub>npm · `package-lock\.json` · indirect dependency<\/sub>/);
+  assert.match(body, /<sub>PyPI · `requirements\.txt`<\/sub>/);
+  assert.match(body, /3 more indirect bump\(s\)/);
+});

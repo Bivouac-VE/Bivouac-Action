@@ -1,0 +1,24 @@
+name: Ecosystem or file request
+description: Ask for support for another package manager or lockfile.
+labels: [enhancement]
+body:
+  - type: dropdown
+    id: ecosystem
+    attributes:
+      label: Ecosystem
+      options:
+        - Maven / Gradle
+        - Cargo
+        - RubyGems / Bundler
+        - Composer
+        - NuGet
+        - yarn.lock / pnpm-lock.yaml
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: files
+    attributes:
+      label: Which files do your dependency PRs change?
+    validations:
+      required: true

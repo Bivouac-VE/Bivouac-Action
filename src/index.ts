@@ -3,11 +3,13 @@ import * as github from '@actions/github';
 import { lookupBreakingChanges } from './changelog-lookup';
 import { renderComment } from './comment';
 import { lookupAdvisories } from './cve-lookup';
-import { detectNpmBumps, ecosystemForPath } from './ecosystems';
+import { detectBumps, manifestKindForPath, mergeBumps } from './ecosystems';
 import { readInputs } from './inputs';
 import { appendPrWarnings } from './pr-description';
 import { COMMENT_MARKER, findExistingComment } from './state';
 import type { Bump, BumpResult, Inputs } from './types';
+
+const MAX_BUMPS = 40;
 
 interface PrContext {
   owner: string;
@@ -79,9 +81,23 @@ async function fetchFileAt(
     if (Array.isArray(data)) return '';
     if (!data || typeof data !== 'object') return '';
     const blob = (data as Record<string, unknown>).content;
-    if (typeof blob === 'string') {
+    if (typeof blob === 'string' && blob.length > 0) {
       const trimmed = blob.replace(/\n/g, '');
       return Buffer.from(trimmed, 'base64').toString('utf8');
+    }
+    // Files over 1 MB (large lockfiles) come back without a base64 body;
+    // fetch the raw bytes instead.
+    const request = (octokit as unknown as { request?: (r: string, p: unknown) => Promise<{ data: unknown }> })
+      .request;
+    if (typeof request === 'function') {
+      const raw = await request('GET /repos/{owner}/{repo}/contents/{path}', {
+        owner,
+        repo,
+        path,
+        ref,
+        mediaType: { format: 'raw' },
+      });
+      if (typeof raw.data === 'string') return raw.data;
     }
     return '';
   } catch {
@@ -89,14 +105,14 @@ async function fetchFileAt(
   }
 }
 
-async function collectNpmBumps(
+async function collectBumps(
   files: DiffFile[],
   octokit: ReturnType<typeof github.getOctokit>,
   ctx: PrContext,
 ): Promise<Bump[]> {
   const out: Bump[] = [];
   for (const f of files) {
-    if (ecosystemForPath(f.filename) !== 'npm') continue;
+    if (!manifestKindForPath(f.filename)) continue;
     let before = '';
     let after = '';
     if (f.status === 'added') {
@@ -107,9 +123,9 @@ async function collectNpmBumps(
       after = await fetchFileAt(octokit, ctx.owner, ctx.repo, f.filename, ctx.headSha);
       before = await fetchFileAt(octokit, ctx.owner, ctx.repo, f.filename, ctx.baseSha);
     }
-    for (const b of detectNpmBumps(before, after)) out.push(b);
+    for (const b of detectBumps(f.filename, before, after)) out.push(b);
   }
-  return out;
+  return mergeBumps(out);
 }
 
 async function postComment(
@@ -150,7 +166,12 @@ export async function process(
   prWarningCount: number;
 }> {
   const files = await listChangedFiles(octokit, prCtx);
-  const bumps = await collectNpmBumps(files, octokit, prCtx);
+  const allBumps = await collectBumps(files, octokit, prCtx);
+  // Direct dependencies first, then transitive; cap the work on huge
+  // lockfile-maintenance PRs so we stay inside API rate limits.
+  const ordered = [...allBumps].sort((a, b) => Number(b.direct === true) - Number(a.direct === true));
+  const bumps = ordered.slice(0, MAX_BUMPS);
+  const skipped = ordered.length - bumps.length;
 
   const results: BumpResult[] = await Promise.all(
     bumps.map(async (bump) => {
@@ -168,7 +189,7 @@ export async function process(
     }),
   );
 
-  const body = renderComment(results);
+  const body = renderComment(results, { skipped });
   const commentId = await postComment(octokit, inputs, prCtx, body);
   const { updated, warningCount } = await appendPrWarnings(
     octokit,

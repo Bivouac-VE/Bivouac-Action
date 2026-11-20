@@ -1,10 +1,14 @@
-export type Ecosystem = 'npm';
+export type Ecosystem = 'npm' | 'pip' | 'go';
 
 export interface Bump {
   name: string;
   from: string;
   to: string;
   ecosystem: Ecosystem;
+  /** Manifest or lockfile the bump was read from. */
+  file?: string;
+  /** True for direct dependencies, false for transitive ones, undefined if unknown. */
+  direct?: boolean;
 }
 
 export interface VulnerabilityRef {

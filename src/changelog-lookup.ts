@@ -1,4 +1,5 @@
 import semver from 'semver';
+import { toSemver } from './ecosystems';
 import type {
   BreakingChangeCategory,
   BreakingChangeFinding,
@@ -6,8 +7,18 @@ import type {
   Bump,
 } from './types';
 
-const BREAKING_MARKERS: ReadonlyArray<{ name: string; pattern: RegExp }> = [
-  { name: 'BREAKING', pattern: /\bBREAKING(?:\s+(?:CHANGE|CHANGES))?\b/i },
+// "BREAKING" in capitals, or the phrase "breaking change(s)" in any case.
+// A lower-case "breaking" alone ("fixed a bug breaking X") is not a marker.
+const BREAKING_RE = /\bBREAKING\b|\b[Bb]reaking[\s-]+[Cc]hanges?\b/;
+// "no breaking changes", "should not result in breaking changes", etc.
+const NEGATED_BREAKING_RE =
+  /\b(?:no|not|without|non|zero|never|nor)\b[^.!?\n]{0,60}\bbreaking\b|\bnon-breaking\b/i;
+
+const BREAKING_MARKERS: ReadonlyArray<{ name: string; pattern: { test(line: string): boolean } }> = [
+  {
+    name: 'BREAKING',
+    pattern: { test: (line: string) => BREAKING_RE.test(line) && !NEGATED_BREAKING_RE.test(line) },
+  },
   { name: 'major:', pattern: /\bmajor\s*:/i },
   { name: 'removed', pattern: /\bremoved\b/i },
   { name: 'deprecated', pattern: /\bdeprecated\s+API(?:s)?\b/i },
@@ -122,6 +133,54 @@ function parseRepo(value: string | undefined): RepoRef | null {
   return { owner, repo };
 }
 
+interface PyPiPackage {
+  info?: { project_urls?: Record<string, string> | null; home_page?: string | null };
+  releases?: Record<string, unknown>;
+}
+
+async function fetchPyPi(name: string): Promise<PyPiPackage | null> {
+  try {
+    const res = await globalThis.fetch(`https://pypi.org/pypi/${encodeURIComponent(name)}/json`);
+    if (!res.ok) return null;
+    return (await res.json()) as PyPiPackage;
+  } catch {
+    return null;
+  }
+}
+
+function goModuleRepo(modulePath: string): RepoRef | null {
+  const gh = modulePath.match(/^github\.com\/([^/]+)\/([^/]+)/);
+  if (gh && gh[1] && gh[2]) return { owner: gh[1], repo: gh[2] };
+  const x = modulePath.match(/^golang\.org\/x\/([^/]+)/);
+  if (x && x[1]) return { owner: 'golang', repo: x[1] };
+  return null;
+}
+
+/** Where to find release notes for a bump, and which versions exist. */
+async function resolveSource(bump: Bump): Promise<{ repo: RepoRef | null; known: string[] }> {
+  if (bump.ecosystem === 'pip') {
+    const pkg = await fetchPyPi(bump.name);
+    const urls = Object.values(pkg?.info?.project_urls ?? {});
+    let repo: RepoRef | null = null;
+    for (const u of [...urls, pkg?.info?.home_page ?? '']) {
+      repo = parseRepo(u);
+      if (repo) break;
+    }
+    const known = Object.keys(pkg?.releases ?? {})
+      .map((v) => toSemver(v))
+      .filter((v): v is string => !!v);
+    return { repo, known };
+  }
+  if (bump.ecosystem === 'go') {
+    return { repo: goModuleRepo(bump.name), known: [] };
+  }
+  const registry = await fetchRegistry(bump.name);
+  return {
+    repo: parseRepo(registry?.repository?.url) ?? parseRepo(registry?.homepage),
+    known: Object.keys(registry?.time ?? {}),
+  };
+}
+
 async function fetchRegistry(name: string): Promise<RegistryPackage | null> {
   try {
     const res = await globalThis.fetch(`https://registry.npmjs.org/${encodeURIComponent(name)}`);
@@ -165,20 +224,27 @@ export async function lookupBreakingChanges(
   bump: Bump,
   octokit: FetchContentOctokit,
 ): Promise<BreakingChangeFinding[]> {
-  const fromV = semver.valid(bump.from);
-  const toV = semver.valid(bump.to);
+  const fromV = toSemver(bump.from);
+  const toV = toSemver(bump.to);
   if (!fromV || !toV) return [];
 
-  const registry = await fetchRegistry(bump.name);
-  const known = Object.keys(registry?.time ?? {});
-  const candidateVersions = versionsInRange(fromV, toV, known);
-  const repo = parseRepo(registry?.repository?.url) ?? parseRepo(registry?.homepage);
+  const source = await resolveSource(bump);
+  const repo = source.repo;
+  let candidateVersions = versionsInRange(fromV, toV, source.known);
 
   const out: BreakingChangeFinding[] = [];
 
   let releases: GitHubRelease[] | null = null;
   if (repo) {
     releases = await fetchGitHubReleases(octokit, repo.owner, repo.repo);
+    if (releases && source.known.length === 0) {
+      // Go has no registry listing here: take the versions from release tags.
+      candidateVersions = versionsInRange(
+        fromV,
+        toV,
+        releases.map((r) => stripTagPrefix(r.tag_name ?? '')),
+      );
+    }
     if (releases) {
       for (const v of candidateVersions) {
         const release = findMatchingRelease(releases, v);
@@ -348,3 +414,4 @@ function findMatchingRelease(releases: GitHubRelease[], version: string): GitHub
   }
   return null;
 }
+export const _scanMarkersForTests = scanMarkers;

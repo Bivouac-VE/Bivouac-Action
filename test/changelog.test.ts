@@ -395,3 +395,16 @@ test('breaking — release-notes pass still produces markers array containing BR
     fetcher.restore();
   }
 });
+
+import { _scanMarkersForTests } from '../src/changelog-lookup';
+
+test('breaking — negated and lower-case mentions are not markers', () => {
+  assert.deepEqual(
+    _scanMarkersForTests('This release should not result in breaking changes.').markers,
+    [],
+  );
+  assert.deepEqual(_scanMarkersForTests('- No breaking changes.').markers, []);
+  assert.deepEqual(_scanMarkersForTests('- Fixed bug breaking custom SSLContexts').markers, []);
+  assert.deepEqual(_scanMarkersForTests('## BREAKING\n- drop Node 16').markers, ['BREAKING']);
+  assert.deepEqual(_scanMarkersForTests('Breaking changes: config moved').markers, ['BREAKING']);
+});
