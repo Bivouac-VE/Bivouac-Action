@@ -1,0 +1,27 @@
+name: Bug or wrong result
+description: The Action failed, or an advisory or breaking change in the comment is wrong or missing.
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Action version
+      description: For example v1 or v1.2.0
+    validations:
+      required: true
+  - type: input
+    id: pr
+    attributes:
+      label: Link to the pull request or workflow run (if public)
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+      description: Include the package, the from and to versions, and the file (package.json, package-lock.json, requirements.txt, go.mod...).
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      render: text
