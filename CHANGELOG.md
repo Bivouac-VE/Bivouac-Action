@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.2.1
+
+- Marketplace listing renamed to "Bivouac Dependency Bump Advisor". No code changes; `uses: Bivouac-VE/bivouac-action@v1` keeps working.
+
 ## v1.2.0
 
 - **npm lockfiles**: reads `package-lock.json` and `npm-shrinkwrap.json`
