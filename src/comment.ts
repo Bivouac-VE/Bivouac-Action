@@ -67,8 +67,9 @@ function renderCveTable(result: BumpResult): string {
   lines.push(`**Still vulnerable after this bump** (${cves.length} advisory(ies)):`);
   const clear = clearingVersion(result.bump.to, cves);
   if (clear) {
+    const shown = result.bump.ecosystem === 'go' ? `v${clear}` : clear;
     lines.push('');
-    lines.push(`_Upgrading to \`${clear}\` or later clears all of them._`);
+    lines.push(`_Upgrading to \`${shown}\` or later clears all of them._`);
   }
   lines.push('');
   if (cves.length <= TOP_ROWS) {

@@ -32741,11 +32741,20 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports._scanMarkersForTests = void 0;
 exports.lookupBreakingChanges = lookupBreakingChanges;
 const semver_1 = __importDefault(__nccwpck_require__(5575));
 const ecosystems_1 = __nccwpck_require__(233);
+// "BREAKING" in capitals, or the phrase "breaking change(s)" in any case.
+// A lower-case "breaking" alone ("fixed a bug breaking X") is not a marker.
+const BREAKING_RE = /\bBREAKING\b|\b[Bb]reaking[\s-]+[Cc]hanges?\b/;
+// "no breaking changes", "should not result in breaking changes", etc.
+const NEGATED_BREAKING_RE = /\b(?:no|not|without|non|zero|never|nor)\b[^.!?\n]{0,60}\bbreaking\b|\bnon-breaking\b/i;
 const BREAKING_MARKERS = [
-    { name: 'BREAKING', pattern: /\bBREAKING(?:\s+(?:CHANGE|CHANGES))?\b/i },
+    {
+        name: 'BREAKING',
+        pattern: { test: (line) => BREAKING_RE.test(line) && !NEGATED_BREAKING_RE.test(line) },
+    },
     { name: 'major:', pattern: /\bmajor\s*:/i },
     { name: 'removed', pattern: /\bremoved\b/i },
     { name: 'deprecated', pattern: /\bdeprecated\s+API(?:s)?\b/i },
@@ -33094,6 +33103,7 @@ function findMatchingRelease(releases, version) {
     }
     return null;
 }
+exports._scanMarkersForTests = scanMarkers;
 
 
 /***/ }),
@@ -33169,8 +33179,9 @@ function renderCveTable(result) {
     lines.push(`**Still vulnerable after this bump** (${cves.length} advisory(ies)):`);
     const clear = clearingVersion(result.bump.to, cves);
     if (clear) {
+        const shown = result.bump.ecosystem === 'go' ? `v${clear}` : clear;
         lines.push('');
-        lines.push(`_Upgrading to \`${clear}\` or later clears all of them._`);
+        lines.push(`_Upgrading to \`${shown}\` or later clears all of them._`);
     }
     lines.push('');
     if (cves.length <= TOP_ROWS) {

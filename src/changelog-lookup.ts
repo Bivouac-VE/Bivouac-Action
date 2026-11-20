@@ -7,8 +7,18 @@ import type {
   Bump,
 } from './types';
 
-const BREAKING_MARKERS: ReadonlyArray<{ name: string; pattern: RegExp }> = [
-  { name: 'BREAKING', pattern: /\bBREAKING(?:\s+(?:CHANGE|CHANGES))?\b/i },
+// "BREAKING" in capitals, or the phrase "breaking change(s)" in any case.
+// A lower-case "breaking" alone ("fixed a bug breaking X") is not a marker.
+const BREAKING_RE = /\bBREAKING\b|\b[Bb]reaking[\s-]+[Cc]hanges?\b/;
+// "no breaking changes", "should not result in breaking changes", etc.
+const NEGATED_BREAKING_RE =
+  /\b(?:no|not|without|non|zero|never|nor)\b[^.!?\n]{0,60}\bbreaking\b|\bnon-breaking\b/i;
+
+const BREAKING_MARKERS: ReadonlyArray<{ name: string; pattern: { test(line: string): boolean } }> = [
+  {
+    name: 'BREAKING',
+    pattern: { test: (line: string) => BREAKING_RE.test(line) && !NEGATED_BREAKING_RE.test(line) },
+  },
   { name: 'major:', pattern: /\bmajor\s*:/i },
   { name: 'removed', pattern: /\bremoved\b/i },
   { name: 'deprecated', pattern: /\bdeprecated\s+API(?:s)?\b/i },
@@ -404,3 +414,4 @@ function findMatchingRelease(releases: GitHubRelease[], version: string): GitHub
   }
   return null;
 }
+export const _scanMarkersForTests = scanMarkers;
