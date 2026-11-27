@@ -138,7 +138,7 @@ one you need in [Discussions](https://github.com/Bivouac-VE/Bivouac-Action/discu
 
 ## About Bivouac
 
-This Action is the free "investigate" step of [Bivouac](https://getbivouac.com).
+This Action is the free "investigate" step of [Bivouac](https://getbivouac.com/?utm_source=github-action&utm_medium=readme).
 The hosted product goes further: it picks the fix, runs your own tests in a
 sandbox and opens the PR only when they pass. Installing this Action does not
 enable any of that.
